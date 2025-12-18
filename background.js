@@ -1,15 +1,25 @@
 const APP_BASE_URL = 'https://sideby.me';
 
 // Sideby Pass - Background Script
-// Video detection via webrequest API
+// Handles video detection via webRequest API, message handling from content scripts & M3U8 playlist fetching/parsing
 
 // Store detected video URLs per tab
 const videosByTab = new Map();
 
 // Config
-const MIN_VIDEO_SIZE_BYTES = 500_000; // Filter out small segments
+const MIN_VIDEO_SIZE_BYTES = 500_000;
 const MAX_RESULTS = 5;
 const ENTRY_TTL_MS = 10 * 60 * 1000;
+
+// HLS Content Types
+const HLS_CONTENT_TYPES = [
+  'audio/mpegurl',
+  'application/mpegurl',
+  'application/x-mpegurl',
+  'audio/x-mpegurl',
+  'application/vnd.apple.mpegurl',
+  'application/vnd.apple.mpegurl.audio',
+];
 
 // Patterns for video detection
 const VIDEO_EXTENSIONS = /\.(mp4|m4v|mov|m3u8)(\?|#|$)/i;
@@ -22,32 +32,61 @@ const SEGMENT_PATTERNS = [
   /[_\-/]init[_\-]?\d*\.(mp4|m4s)/i,
   /[&?]range=\d+[_\-]\d+/i,
   /\/range\/\d+/i,
-  // Byte-range requests (Instagram uses these for segments)
   /[&?]bytestart=/i,
   /[&?]byteend=/i,
 ];
 
-// Patterns to identify audio-only (should be filtered out)
-const AUDIO_ONLY_PATTERNS = [/[_\-/]audio[_\-/]/i, /audio[_\-]only/i, /\.m4a(\?|#|$)/i, /\.aac(\?|#|$)/i];
+// Patterns to identify audio-only
+const AUDIO_ONLY_PATTERNS = [
+  /[_\-/]audio[_\-/]/i, 
+  /audio[_\-]only/i, 
+  /\.m4a(\?|#|$)/i, 
+  /\.aac(\?|#|$)/i
+];
 
-// Check if URL looks like a playable video (not a segment)
-function isPlayableVideo(url, contentType, size) {
+// Source priority scores (higher = more relevant)
+const SOURCE_PRIORITY = {
+  'instagram': 100,
+  'twitter': 100,
+  'vimeo': 100,
+  'tiktok': 100,
+  'instagram-json': 95,
+  'api': 90,
+  'hls': 85,
+  'og:video': 80,
+  'dom-playing': 75,
+  'dom': 50,
+  'webRequest': 40,
+};
+
+// URL utilities
+function cleanByteRangeUrl(url) {
+  return url
+    .replace(/&bytestart=\d*/gi, '')
+    .replace(/&byteend=\d*/gi, '')
+    .replace(/\?bytestart=\d*&?/gi, '?')
+    .replace(/\?$/g, '');
+}
+
+// Video filtering
+function isPlayableVideo(url, contentType, size, source) {
   const lower = url.toLowerCase();
 
-  // Allow YouTube URLs through (they're played directly by our player)
+  // Always allow site-specific sources
+  if (source && SOURCE_PRIORITY[source] >= 75) {
+    return true;
+  }
+
+  // Allow YouTube URLs (played directly)
   if (lower.includes('youtube.com/watch') || lower.includes('youtube.com/shorts/') || lower.includes('youtu.be/')) {
     return true;
   }
 
-  // Filter out webm files
-  if (/\.webm(\?|#|$)/i.test(lower)) {
-    return false;
-  }
+  // Filter out webm
+  if (/\.webm(\?|#|$)/i.test(lower)) return false;
 
-  // Filter out m4s segment files
-  if (/\.m4s(\?|#|$)/i.test(lower)) {
-    return false;
-  }
+  // Filter out m4s segments
+  if (/\.m4s(\?|#|$)/i.test(lower)) return false;
 
   // Must have video extension or content type
   const hasVideoExt = VIDEO_EXTENSIONS.test(lower);
@@ -55,64 +94,66 @@ function isPlayableVideo(url, contentType, size) {
   const hasVideoContentType = contentType && VIDEO_CONTENT_TYPES.test(contentType);
 
   if (!hasVideoExt && !hasVideoContentType) {
-    // Allow segment extensions only if we have size info and it's large
     if (hasSegmentExt && size && size > MIN_VIDEO_SIZE_BYTES * 2) {
-      // Large segment file might be a complete video
+      // Large segment might be complete video
     } else {
       return false;
     }
   }
 
-  // Filter out segment patterns
+  // Filter segment patterns
   for (const pattern of SEGMENT_PATTERNS) {
     if (pattern.test(lower)) return false;
   }
 
-  // Filter out audio-only
+  // Filter audio-only
   for (const pattern of AUDIO_ONLY_PATTERNS) {
     if (pattern.test(lower)) return false;
   }
 
   // Filter by size if available
-  if (size && size < MIN_VIDEO_SIZE_BYTES) {
-    return false;
-  }
+  if (size && size < MIN_VIDEO_SIZE_BYTES) return false;
 
   return true;
 }
 
-// Score a video URL (higher = better)
-function scoreVideo(url, size, source) {
+// Video scoring
+function scoreVideo(url, size, source, quality) {
   let score = 10;
-
   const lower = url.toLowerCase();
 
-  // Boost by extension
+  // Source priority (biggest factor)
+  if (source && SOURCE_PRIORITY[source]) {
+    score += SOURCE_PRIORITY[source];
+  }
+
+  // Extension boost
   if (/\.mp4(\?|#|$)/i.test(lower)) score += 20;
-  else if (/\.m3u8(\?|#|$)/i.test(lower)) score += 25; // Master playlist
+  else if (/\.m3u8(\?|#|$)/i.test(lower)) score += 15;
 
-  // Boost by size
+  // Size boost
   if (size) {
-    if (size > 50_000_000)
-      score += 30; // >50MB
-    else if (size > 10_000_000)
-      score += 20; // >10MB
-    else if (size > 5_000_000) score += 10; // >5MB
+    if (size > 50_000_000) score += 30;
+    else if (size > 10_000_000) score += 20;
+    else if (size > 5_000_000) score += 10;
   }
 
-  // Boost quality indicators
+  // Quality boost
+  if (quality) {
+    const q = parseInt(quality);
+    if (q >= 1080) score += 15;
+    else if (q >= 720) score += 10;
+    else if (q >= 480) score += 5;
+  }
+
+  // Boost known quality indicators in URL
   if (/1080|1920|hd|high/i.test(lower)) score += 5;
-  if (/720|sd/i.test(lower)) score += 3;
-
-  // Boost videos from API parsing (instagram, twitter, etc.)
-  if (source === 'instagram' || source === 'twitter' || source === 'api') {
-    score += 50;
-  }
+  if (/720/i.test(lower)) score += 3;
 
   return score;
 }
 
-// Get filtered and sorted videos for a tab
+// Video retrieval
 function getVideosForTab(tabId) {
   const tabVideos = videosByTab.get(tabId);
   if (!tabVideos) return [];
@@ -121,29 +162,30 @@ function getVideosForTab(tabId) {
   const results = [];
 
   for (const [url, info] of tabVideos.entries()) {
-    // Skip expired entries
+    // Skip expired
     if (now - info.timestamp > ENTRY_TTL_MS) {
       tabVideos.delete(url);
       continue;
     }
 
     // Skip non-playable
-    if (!isPlayableVideo(url, info.contentType, info.size)) {
+    if (!isPlayableVideo(url, info.contentType, info.size, info.source)) {
       continue;
     }
 
     results.push({
       url,
       size: info.size,
-      score: scoreVideo(url, info.size, info.source),
+      score: scoreVideo(url, info.size, info.source, info.quality),
       timestamp: info.timestamp,
       quality: info.quality,
       source: info.source,
       title: info.title,
+      playlist: info.playlist,
     });
   }
 
-  // Sort by score (desc), then by timestamp (desc)
+  // Sort by score (desc), then timestamp (desc)
   results.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     return b.timestamp - a.timestamp;
@@ -152,51 +194,168 @@ function getVideosForTab(tabId) {
   return results.slice(0, MAX_RESULTS);
 }
 
-// Webrequest listener
+// M3U8 parsing
+async function fetchAndParseM3U8(url, tabId) {
+  try {
+    const response = await fetch(url);
+    const text = await response.text();
+    
+    if (!text.includes('#EXTM3U')) return;
+    
+    const variants = [];
+    
+    if (text.includes('#EXT-X-STREAM-INF:')) {
+      // Master playlist - parse variants
+      const segments = text.split('#EXT-X-STREAM-INF:');
+      
+      for (const segment of segments) {
+        if (!segment.trim()) continue;
+        
+        let quality = null;
+        let variantUrl = null;
+        
+        const lines = segment.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          
+          if (trimmed.includes('RESOLUTION=')) {
+            const match = trimmed.match(/RESOLUTION=(\d+)x(\d+)/);
+            if (match) {
+              quality = `${Math.min(parseInt(match[1]), parseInt(match[2]))}p`;
+            }
+          }
+          
+          if (trimmed && !trimmed.startsWith('#') && (trimmed.includes('.m3u8') || trimmed.match(/^https?:\/\//))) {
+            variantUrl = trimmed;
+          }
+        }
+        
+        if (variantUrl) {
+          // Make absolute URL if relative
+          if (!variantUrl.startsWith('http')) {
+            const baseMatch = url.match(/(.+\/)[^\/]+\.m3u8/i);
+            if (baseMatch) {
+              variantUrl = baseMatch[1] + variantUrl;
+            }
+          }
+          variants.push({ url: variantUrl, quality });
+        }
+      }
+      
+      // Sort by quality and add best variants
+      variants.sort((a, b) => {
+        const qa = parseInt(a.quality) || 0;
+        const qb = parseInt(b.quality) || 0;
+        return qb - qa;
+      });
+      
+      for (const v of variants.slice(0, 3)) {
+        addVideoToTab(tabId, {
+          url: v.url,
+          quality: v.quality,
+          source: 'hls',
+          title: null,
+          playlist: true,
+        });
+      }
+    }
+  } catch (e) {}
+}
+
+// Video storage
+function addVideoToTab(tabId, video) {
+  if (!tabId || !video.url) return;
+  if (video.url.startsWith('blob:') || video.url.startsWith('data:')) return;
+  
+  // Clean the URL
+  const cleanUrl = cleanByteRangeUrl(video.url);
+  
+  if (!videosByTab.has(tabId)) {
+    videosByTab.set(tabId, new Map());
+  }
+
+  const tabVideos = videosByTab.get(tabId);
+  const existing = tabVideos.get(cleanUrl);
+
+  if (!existing) {
+    tabVideos.set(cleanUrl, {
+      size: video.size || null,
+      contentType: video.contentType || null,
+      timestamp: Date.now(),
+      source: video.source,
+      quality: video.quality,
+      title: video.title,
+      playlist: video.playlist,
+    });
+  } else {
+    // Update with higher priority source
+    const existingPriority = SOURCE_PRIORITY[existing.source] || 0;
+    const newPriority = SOURCE_PRIORITY[video.source] || 0;
+    
+    if (newPriority > existingPriority) {
+      existing.source = video.source;
+    }
+    if (video.quality && !existing.quality) {
+      existing.quality = video.quality;
+    }
+    if (video.title && !existing.title) {
+      existing.title = video.title;
+    }
+  }
+}
+
+// WebRequest listener
 chrome.webRequest.onCompleted.addListener(
-  details => {
+  async details => {
     try {
       if (!details.tabId || details.tabId < 0) return;
 
       const url = details.url;
       if (!url || url.startsWith('data:') || url.startsWith('blob:')) return;
 
-      // Check if this is a video request
       const contentTypeHeader = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type');
       const contentType = contentTypeHeader?.value || '';
 
+      // Check for M3U8/HLS content type
+      const isHLS = HLS_CONTENT_TYPES.some(ct => contentType.toLowerCase().includes(ct));
+      const isM3U8Url = url.includes('.m3u8');
+
+      if (isHLS || isM3U8Url) {
+        // Fetch and parse M3U8 for variants
+        fetchAndParseM3U8(url, details.tabId);
+        
+        // Also add the master playlist
+        addVideoToTab(details.tabId, {
+          url: url,
+          contentType: contentType,
+          source: 'hls',
+          playlist: true,
+        });
+        return;
+      }
+
+      // Check for regular video
       const hasVideoExt = VIDEO_EXTENSIONS.test(url) || SEGMENT_EXTENSIONS.test(url);
       const hasVideoContentType = VIDEO_CONTENT_TYPES.test(contentType);
 
       if (!hasVideoExt && !hasVideoContentType) return;
 
-      // Get content length
       const contentLengthHeader = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length');
       const size = contentLengthHeader?.value ? parseInt(contentLengthHeader.value, 10) : null;
 
-      // Store the video info
-      if (!videosByTab.has(details.tabId)) {
-        videosByTab.set(details.tabId, new Map());
-      }
-
-      const tabVideos = videosByTab.get(details.tabId);
-
-      // Update or add entry
-      const existing = tabVideos.get(url);
-      if (!existing || (size && (!existing.size || size > existing.size))) {
-        tabVideos.set(url, {
-          size,
-          contentType,
-          timestamp: Date.now(),
-        });
-      }
+      addVideoToTab(details.tabId, {
+        url: url,
+        size: size,
+        contentType: contentType,
+        source: 'webRequest',
+      });
     } catch (e) {}
   },
   { urls: ['<all_urls>'], types: ['media', 'xmlhttprequest', 'other'] },
   ['responseHeaders']
 );
 
-// Clean up when tab is closed
+// Tab cleanup
 chrome.tabs.onRemoved.addListener(tabId => {
   videosByTab.delete(tabId);
 });
@@ -210,74 +369,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'ADD_DOM_VIDEO') {
-    // Content script found a video URL in the DOM
-    const { tabId, url, currentTime } = message;
-    if (!tabId || !url) return;
-
-    if (!videosByTab.has(tabId)) {
-      videosByTab.set(tabId, new Map());
-    }
-
-    const tabVideos = videosByTab.get(tabId);
-    const existing = tabVideos.get(url);
-
-    if (!existing) {
-      tabVideos.set(url, {
-        size: null,
-        contentType: null,
-        timestamp: Date.now(),
-        currentTime,
-        fromDom: true,
-      });
-    } else {
-      existing.currentTime = currentTime;
-      existing.fromDom = true;
-    }
-
-    return true;
-  }
-
-  // Handle videos from XHR/fetch interception (watcher.js)
   if (message?.type === 'ADD_VIDEO') {
     const tabId = message.tabId || sender?.tab?.id;
-    const url = message.url;
-    if (!tabId || !url) return;
-
-    // Skip blob/data URLs
-    if (url.startsWith('blob:') || url.startsWith('data:')) return;
-
-    if (!videosByTab.has(tabId)) {
-      videosByTab.set(tabId, new Map());
-    }
-
-    const tabVideos = videosByTab.get(tabId);
-    const existing = tabVideos.get(url);
-
-    if (!existing) {
-      tabVideos.set(url, {
-        size: null,
-        contentType: null,
-        timestamp: Date.now(),
-        source: message.source,
-        quality: message.quality,
-        title: message.title,
-        fromApi: message.source === 'instagram' || message.source === 'twitter' || message.source === 'api',
-      });
-    } else {
-      // Update with API source if available (higher priority)
-      if (message.source && !existing.source) {
-        existing.source = message.source;
-      }
-      if (message.quality && !existing.quality) {
-        existing.quality = message.quality;
-      }
-    }
-
+    addVideoToTab(tabId, {
+      url: message.url,
+      source: message.source,
+      quality: message.quality,
+      title: message.title,
+      playlist: message.playlist,
+    });
     return true;
   }
 
-  // Handle clearing videos when URL changes
   if (message?.type === 'CLEAR_VIDEOS') {
     const tabId = sender?.tab?.id;
     if (tabId && videosByTab.has(tabId)) {

@@ -1,5 +1,6 @@
+
 // Sideby Pass - Content Script
-// Listens for video-found events from watcher.js & forwards them to the background script
+// Listens for video-found events from watcher.js, scans DOM for videos, parses JSON script tags, checks og:video meta tags.
 
 (function () {
   if (window.__sidebyContentInjected) return;
@@ -7,13 +8,38 @@
 
   const SIDEBY_EVENT = 'sideby:video-found';
   const CLEAR_EVENT = 'sideby:clear-videos';
+  const PROCESSED_CLASS = 'sideby-processed';
 
-  // Listen for video-found events from watcher.js
-  window.addEventListener(SIDEBY_EVENT, event => {
-    const video = event.detail;
-    if (!video || !video.url) return;
+  // Utilities
+  function searchKey(obj, key, results = []) {
+    if (!obj || typeof obj !== 'object') return results;
+    for (const k in obj) {
+      if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
+      if (k === key && obj[k]) {
+        results.push(obj[k]);
+      }
+      if (typeof obj[k] === 'object') {
+        searchKey(obj[k], key, results);
+      }
+    }
+    return results;
+  }
 
-    // Send to background script
+  function cleanByteRangeUrl(url) {
+    return url
+      .replace(/&bytestart=\d*/gi, '')
+      .replace(/&byteend=\d*/gi, '')
+      .replace(/\?bytestart=\d*&?/gi, '?')
+      .replace(/\?$/g, '');
+  }
+
+  function isInViewport(el) {
+    const rect = el.getBoundingClientRect();
+    return rect.top < window.innerHeight && rect.bottom > 0 
+        && rect.left < window.innerWidth && rect.right > 0;
+  }
+
+  function sendVideo(video) {
     chrome.runtime.sendMessage({
       type: 'ADD_VIDEO',
       url: video.url,
@@ -21,141 +47,231 @@
       source: video.source,
       title: video.title || document.title,
       pageUrl: document.location.href,
+      playlist: video.playlist,
     });
+  }
+
+  // Event listeners (from watcher.js)
+  window.addEventListener(SIDEBY_EVENT, event => {
+    const video = event.detail;
+    if (!video || !video.url) return;
+    sendVideo(video);
   });
 
-  // Listen for clear-videos event (when URL changes in SPA)
   window.addEventListener(CLEAR_EVENT, () => {
-    chrome.runtime.sendMessage({
-      type: 'CLEAR_VIDEOS',
-    });
+    chrome.runtime.sendMessage({ type: 'CLEAR_VIDEOS' });
   });
 
-  // Check if on YouTube and report the video URL directly
+  // YouTube direct URL
   function checkYouTube() {
-    const hostname = window.location.hostname;
-    if (!hostname.includes('youtube.com')) return;
-
+    if (!window.location.hostname.includes('youtube.com')) return;
     const url = window.location.href;
-
-    // Check if on a video page
+    
     if (url.includes('/watch') || url.includes('/shorts/')) {
-      chrome.runtime.sendMessage({
-        type: 'ADD_VIDEO',
+      sendVideo({
         url: url,
         source: 'youtube',
         title: document.title.replace(' - YouTube', ''),
-        pageUrl: url,
       });
     }
   }
 
-  // Check YouTube on load and URL changes
   if (window.location.hostname.includes('youtube.com')) {
-    // Initial check after page loads
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => setTimeout(checkYouTube, 1000));
     } else {
       setTimeout(checkYouTube, 1000);
     }
-
-    // Re-check on navigation (YouTube is SPA)
+    
     let lastYouTubeUrl = window.location.href;
     setInterval(() => {
       if (window.location.href !== lastYouTubeUrl) {
         lastYouTubeUrl = window.location.href;
-        // Clear old videos first
         chrome.runtime.sendMessage({ type: 'CLEAR_VIDEOS' });
         setTimeout(checkYouTube, 500);
       }
     }, 500);
   }
 
-  // Collect video URLs from DOM elements
-  function collectDomVideos() {
-    const results = [];
-    const seen = new Set();
-
+  // DOM video scanning
+  function scanVideos() {
     const videos = document.querySelectorAll('video');
-
+    
     for (const video of videos) {
+      if (video.classList.contains(PROCESSED_CLASS)) continue;
+      
       const urls = [];
-
+      
+      // Prefer playing and visible videos
+      const isPlaying = !video.paused && !video.ended && video.currentTime > 0;
+      const isVisible = isInViewport(video);
+      
+      // Get src
       if (video.src && !video.src.startsWith('blob:') && !video.src.startsWith('data:')) {
         urls.push(video.src);
       }
       if (video.currentSrc && !video.currentSrc.startsWith('blob:') && !video.currentSrc.startsWith('data:')) {
         urls.push(video.currentSrc);
       }
-
-      const sources = video.querySelectorAll('source[src]');
-      for (const source of sources) {
+      
+      // Get source elements
+      for (const source of video.querySelectorAll('source[src]')) {
         if (source.src && !source.src.startsWith('blob:') && !source.src.startsWith('data:')) {
           urls.push(source.src);
         }
       }
-
-      const currentTime =
-        Number.isFinite(video.currentTime) && video.currentTime > 1 ? Math.floor(video.currentTime) : 0;
-
+      
+      // Send unique URLs
+      const seen = new Set();
       for (const url of urls) {
-        if (!seen.has(url)) {
-          seen.add(url);
-          results.push({ url, currentTime });
-        }
-      }
-    }
-
-    return results;
-  }
-
-  // Send DOM videos to background
-  function reportDomVideos() {
-    try {
-      const videos = collectDomVideos();
-
-      for (const { url, currentTime } of videos) {
-        chrome.runtime.sendMessage({
-          type: 'ADD_VIDEO',
-          url,
-          source: 'dom',
+        if (seen.has(url)) continue;
+        seen.add(url);
+        
+        // Clean byte-range URLs
+        const cleanUrl = cleanByteRangeUrl(url);
+        if (cleanUrl.includes('bytestart=') || cleanUrl.includes('byteend=')) continue;
+        
+        sendVideo({
+          url: cleanUrl,
+          source: isPlaying && isVisible ? 'dom-playing' : 'dom',
           title: document.title,
-          currentTime,
         });
       }
-    } catch (e) {}
+      
+      video.classList.add(PROCESSED_CLASS);
+    }
   }
 
-  // Get page metadata
-  function getPageInfo() {
-    return {
-      title: document.title || '',
-      pageUrl: window.location.href,
-    };
+  // OG:VIDEO meta tag scanning
+  function scanMetaTags() {
+    const ogVideo = document.querySelector('meta[property="og:video"]');
+    if (ogVideo && ogVideo.content) {
+      sendVideo({
+        url: ogVideo.content,
+        source: 'og:video',
+        title: document.title,
+      });
+    }
+    
+    const ogVideoUrl = document.querySelector('meta[property="og:video:url"]');
+    if (ogVideoUrl && ogVideoUrl.content) {
+      sendVideo({
+        url: ogVideoUrl.content,
+        source: 'og:video',
+        title: document.title,
+      });
+    }
+    
+    const ogVideoSecure = document.querySelector('meta[property="og:video:secure_url"]');
+    if (ogVideoSecure && ogVideoSecure.content) {
+      sendVideo({
+        url: ogVideoSecure.content,
+        source: 'og:video',
+        title: document.title,
+      });
+    }
   }
 
-  // Handle messages from popup/background
+  // JSON script tag scanning (Instagram stories, etc.)
+  function scanJsonScripts() {
+    const hostname = window.location.hostname;
+    
+    // Instagram: look for video_versions in JSON scripts
+    if (hostname.includes('instagram.com')) {
+      const scripts = document.querySelectorAll('script[type="application/json"]');
+      for (const script of scripts) {
+        if (script.classList.contains(PROCESSED_CLASS)) continue;
+        
+        const text = script.innerText || script.textContent;
+        if (!text || !text.includes('video_versions')) continue;
+        
+        try {
+          const data = JSON.parse(text);
+          const versions = searchKey(data, 'video_versions');
+          
+          for (const vArr of versions) {
+            if (!Array.isArray(vArr) || !vArr.length) continue;
+            
+            const sorted = [...vArr].sort((a, b) => (b.width || 0) - (a.width || 0));
+            const best = sorted[0];
+            
+            if (best && best.url) {
+              sendVideo({
+                url: cleanByteRangeUrl(best.url),
+                quality: best.width ? `${best.width}p` : null,
+                source: 'instagram-json',
+                title: document.title,
+              });
+            }
+          }
+          
+          script.classList.add(PROCESSED_CLASS);
+        } catch (e) {}
+      }
+    }
+    
+    // TikTok: parse __UNIVERSAL_DATA_FOR_REHYDRATION__
+    if (hostname.includes('tiktok.com')) {
+      const rehydration = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
+      if (rehydration && !rehydration.classList.contains(PROCESSED_CLASS)) {
+        try {
+          const data = JSON.parse(rehydration.textContent);
+          const itemStruct = data?.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+          
+          if (itemStruct) {
+            const bitrateInfo = itemStruct.video?.bitrateInfo?.[0];
+            const playAddr = bitrateInfo?.PlayAddr;
+            
+            if (playAddr && playAddr.UrlList && playAddr.UrlList.length) {
+              // Filter out webapp-prime URLs
+              const urls = playAddr.UrlList.filter(u => !u.includes('v16-webapp-prime'));
+              if (urls[0]) {
+                sendVideo({
+                  url: urls[0],
+                  quality: playAddr.Width ? `${playAddr.Width}p` : null,
+                  source: 'tiktok',
+                  title: itemStruct.desc || document.title,
+                });
+              }
+            }
+          }
+          
+          rehydration.classList.add(PROCESSED_CLASS);
+        } catch (e) {}
+      }
+    }
+  }
+
+  // Message handlers
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'GET_PAGE_INFO') {
-      sendResponse(getPageInfo());
+      sendResponse({
+        title: document.title || '',
+        pageUrl: window.location.href,
+      });
       return true;
     }
 
     if (message?.type === 'SCAN_DOM') {
-      const videos = collectDomVideos();
-      sendResponse({ videos });
-      reportDomVideos();
+      scanVideos();
+      scanMetaTags();
+      scanJsonScripts();
+      sendResponse({ success: true });
       return true;
     }
   });
 
-  // Initial DOM scan after page loads
+  // Initialization
+  function runScans() {
+    scanVideos();
+    scanMetaTags();
+    scanJsonScripts();
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(reportDomVideos, 500);
-    });
+    document.addEventListener('DOMContentLoaded', () => setTimeout(runScans, 500));
   } else {
-    setTimeout(reportDomVideos, 500);
+    setTimeout(runScans, 500);
   }
 
   // Re-scan when DOM changes
@@ -163,10 +279,12 @@
     for (const mutation of mutations) {
       if (mutation.type === 'childList') {
         const hasMedia = [...mutation.addedNodes].some(
-          node => node.nodeName === 'VIDEO' || node.querySelector?.('video')
+          node => node.nodeName === 'VIDEO' || 
+                  node.nodeName === 'SCRIPT' ||
+                  node.querySelector?.('video')
         );
         if (hasMedia) {
-          reportDomVideos();
+          runScans();
           break;
         }
       }
@@ -174,9 +292,6 @@
   });
 
   if (document.documentElement) {
-    observer.observe(document.documentElement, {
-      childList: true,
-      subtree: true,
-    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 })();

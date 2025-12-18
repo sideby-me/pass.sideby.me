@@ -1,5 +1,6 @@
 // Sideby Pass - XHR Watcher
-// Injected into page context (MAIN world) at document_start to intercept XHR/fetch responses and extract video URLs from JSON APIs
+// Injected into page context (MAIN world) at document_start
+// Intercepts XHR/Fetch and parses responses based on current site
 
 (function () {
   if (window.__sidebyWatcherInjected) return;
@@ -9,25 +10,18 @@
   const CLEAR_EVENT = 'sideby:clear-videos';
 
   let lastUrl = document.location.href;
-  let foundVideos = new Set(); // Track URLs to avoid duplicates
+  const foundVideos = new Set();
 
-  // Dispatch video found event to content script
+  // Utilities
   function dispatchVideo(video) {
-    if (foundVideos.has(video.url)) return;
+    if (!video.url || foundVideos.has(video.url)) return;
     foundVideos.add(video.url);
-
+    
     try {
-      window.dispatchEvent(
-        new CustomEvent(SIDEBY_EVENT, {
-          detail: video,
-        })
-      );
-    } catch (e) {
-      console.warn('Sideby: dispatch failed', e);
-    }
+      window.dispatchEvent(new CustomEvent(SIDEBY_EVENT, { detail: video }));
+    } catch (e) {}
   }
 
-  // Clear videos when URL changes (for SPAs)
   function checkUrlChange() {
     if (document.location.href !== lastUrl) {
       lastUrl = document.location.href;
@@ -35,154 +29,269 @@
       window.dispatchEvent(new CustomEvent(CLEAR_EVENT));
     }
   }
-
-  // Check URL change periodically (for SPA navigation)
   setInterval(checkUrlChange, 500);
 
-  // Recursively search for a key in an object
   function searchKey(obj, key, results = []) {
     if (!obj || typeof obj !== 'object') return results;
-
     for (const k in obj) {
       if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
-
       if (k === key && obj[k]) {
         results.push(obj[k]);
       }
-
       if (typeof obj[k] === 'object') {
         searchKey(obj[k], key, results);
       }
     }
-
     return results;
   }
 
-  // Parse Instagram API response
-  function parseInstagram(responseText, url) {
-    if (!responseText.includes('video_versions')) return;
+  // Clean byte-range params from Instagram URLs
+  function cleanByteRangeUrl(url) {
+    return url
+      .replace(/&bytestart=\d*/gi, '')
+      .replace(/&byteend=\d*/gi, '')
+      .replace(/\?bytestart=\d*&?/gi, '?')
+      .replace(/\?$/g, '');
+  }
 
-    try {
-      // Instagram sometimes prefixes with "for (;;);"
-      const cleaned = responseText.replace(/^for\s*\(;;\);?/, '');
-      const data = JSON.parse(cleaned);
-
-      const videoVersions = searchKey(data, 'video_versions');
-
-      for (const versions of videoVersions) {
-        if (!Array.isArray(versions) || !versions.length) continue;
-
-        // Get the highest quality version
-        const sorted = [...versions].sort((a, b) => (b.width || 0) - (a.width || 0));
-        const best = sorted[0];
-
-        if (best && best.url) {
-          // Filter out byte-range URLs
-          if (best.url.includes('bytestart=') || best.url.includes('byteend=')) {
-            continue;
+  // Site-specific parsers
+  const InstagramParser = {
+    origins: ['www.instagram.com', 'instagram.com'],
+    
+    onLoad(responseText, url) {
+      if (!responseText.includes('video_versions')) return;
+      
+      try {
+        // Instagram sometimes prefixes with "for (;;);"
+        const cleaned = responseText.replace(/^for\s*\(;;\);?/g, '');
+        const data = JSON.parse(cleaned);
+        const videoVersions = searchKey(data, 'video_versions');
+        
+        for (const versions of videoVersions) {
+          if (!Array.isArray(versions) || !versions.length) continue;
+          
+          // Sort by width (highest first)
+          const sorted = [...versions].sort((a, b) => (b.width || 0) - (a.width || 0));
+          
+          for (const v of sorted) {
+            if (v && v.url) {
+              const cleanUrl = cleanByteRangeUrl(v.url);
+              dispatchVideo({
+                url: cleanUrl,
+                quality: v.width ? `${v.width}p` : null,
+                source: 'instagram',
+                title: document.title,
+              });
+              break; // Only take best quality
+            }
           }
+        }
+      } catch (e) {}
+    }
+  };
 
+  const TwitterParser = {
+    origins: ['twitter.com', 'x.com'],
+    
+    onLoad(responseText, url) {
+      if (!responseText.includes('video_info')) return;
+      
+      try {
+        const data = JSON.parse(responseText);
+        const videoInfos = searchKey(data, 'video_info');
+        
+        for (const info of videoInfos) {
+          if (!info || !info.variants || !Array.isArray(info.variants)) continue;
+          
+          // Filter out HLS, keep MP4s
+          const mp4Variants = info.variants.filter(v => 
+            v.url && 
+            v.content_type !== 'application/x-mpegURL' && 
+            !v.url.includes('.m3u8')
+          );
+          
+          if (!mp4Variants.length) continue;
+          
+          // Sort by bitrate (highest first)
+          mp4Variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+          const best = mp4Variants[0];
+          
+          // Extract quality from URL (e.g., /avc1/720x1280/)
+          let quality = null;
+          const match = best.url.match(/avc1\/(\d+)x(\d+)/);
+          if (match) {
+            quality = `${Math.min(parseInt(match[1]), parseInt(match[2]))}p`;
+          }
+          
           dispatchVideo({
             url: best.url,
-            quality: best.width ? `${best.width}p` : null,
-            source: 'instagram',
+            quality: quality,
+            source: 'twitter',
             title: document.title,
           });
         }
-      }
-    } catch (e) {}
-  }
+      } catch (e) {}
+    }
+  };
 
-  // Parse Twitter/X API response
-  function parseTwitter(responseText, url) {
-    if (!responseText.includes('video_info')) return;
-
-    try {
-      const data = JSON.parse(responseText);
-      const videoInfos = searchKey(data, 'video_info');
-
-      // Only get the first (most relevant) video_info to avoid duplicates
-      const info = videoInfos[0];
-      if (!info || !info.variants || !Array.isArray(info.variants)) return;
-
-      // Filter out HLS playlists, keep MP4s
-      const mp4Variants = info.variants.filter(
-        v => v.url && v.content_type !== 'application/x-mpegURL' && !v.url.includes('.m3u8')
-      );
-
-      if (!mp4Variants.length) return;
-
-      // Sort by bitrate (highest first) and get the best one
-      mp4Variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-      const best = mp4Variants[0];
-
-      // Extract quality from URL (e.g., /avc1/720x1280/)
-      let quality = null;
-      const match = best.url.match(/\/(\d+)x(\d+)\//);
-      if (match) {
-        quality = `${Math.min(parseInt(match[1]), parseInt(match[2]))}p`;
-      }
-
-      dispatchVideo({
-        url: best.url,
-        quality: quality,
-        source: 'twitter',
-        title: document.title,
-      });
-    } catch (e) {}
-  }
-
-  // Parse generic video responses
-  function parseGeneric(responseText, url) {
-    try {
-      const data = JSON.parse(responseText);
-
-      const videoKeys = ['file', 'video_url', 'video', 'source', 'src', 'stream_url', 'download_url'];
-
-      for (const key of videoKeys) {
-        const values = searchKey(data, key);
-        for (const value of values) {
-          // Only MP4 and M3U8, no webm
-          if (typeof value === 'string' && value.match(/\.(mp4|m3u8)(\?|$)/i)) {
+  const VimeoParser = {
+    origins: ['vimeo.com', 'player.vimeo.com'],
+    
+    onLoad(responseText, url) {
+      if (!url.includes('/config')) return;
+      
+      try {
+        const data = JSON.parse(responseText);
+        const title = document.querySelector('#main main h1')?.innerText || document.title;
+        
+        // Check progressive files first
+        const progressive = data?.request?.files?.progressive;
+        if (progressive && progressive.length) {
+          // Sort by width (highest first)
+          const sorted = [...progressive].sort((a, b) => (b.width || 0) - (a.width || 0));
+          for (const p of sorted) {
             dispatchVideo({
-              url: value,
-              source: 'api',
-              title: document.title,
+              url: p.url,
+              quality: p.width ? `${p.width}p` : null,
+              source: 'vimeo',
+              title: title,
             });
           }
+          return;
         }
-      }
-    } catch (e) {
-      // Not JSON, check HLS
-      if (responseText.includes('#EXTM3U') && responseText.includes('#EXT-X-') && url.includes('.m3u8')) {
-        dispatchVideo({
-          url: url,
-          source: 'hls',
-          title: document.title,
-        });
-      }
+        
+        // Fall back to HLS
+        const hls = data?.request?.files?.hls;
+        if (hls && hls.cdns) {
+          for (const cdnKey in hls.cdns) {
+            const cdnUrl = hls.cdns[cdnKey].url;
+            if (cdnUrl && !cdnUrl.includes('cme-media.vimeocdn.com')) {
+              dispatchVideo({
+                url: cdnUrl.replace(/\/subtitles\/.*\//, '/'),
+                quality: data?.video?.height ? `${data.video.height}p` : null,
+                source: 'vimeo',
+                title: title,
+                playlist: true,
+              });
+            }
+          }
+        }
+      } catch (e) {}
     }
-  }
+  };
 
-  // Process XHR response
-  function processResponse(responseText, url) {
-    const hostname = document.location.hostname;
+  const HLSParser = {
+    origins: [], // Matches all sites
+    
+    onLoad(responseText, url) {
+      if (!responseText.includes('#EXTM3U')) return;
+      if (!url.includes('.m3u8')) return;
+      
+      try {
+        const title = document.title;
+        const variants = [];
+        
+        // Parse master playlist
+        if (responseText.includes('#EXT-X-STREAM-INF:')) {
+          const segments = responseText.split('#EXT-X-STREAM-INF:');
+          
+          for (const segment of segments) {
+            if (!segment.trim()) continue;
+            
+            let quality = null;
+            let variantUrl = null;
+            
+            const parts = segment.split(/[\s,\n]+/);
+            for (const part of parts) {
+              if (part.includes('RESOLUTION=')) {
+                const res = part.split('=')[1];
+                if (res) {
+                  quality = res.split('x')[1] + 'p';
+                }
+              }
+              if (part.includes('.m3u8') || part.match(/^https?:\/\//)) {
+                variantUrl = part.trim();
+              }
+            }
+            
+            if (variantUrl) {
+              // Make absolute URL if relative
+              if (!variantUrl.startsWith('http')) {
+                const baseMatch = url.match(/(.+\/)[^\/]+\.m3u8/i);
+                if (baseMatch) {
+                  variantUrl = baseMatch[1] + variantUrl;
+                }
+              }
+              
+              variants.push({ url: variantUrl, quality });
+            }
+          }
+          
+          // Sort by quality and dispatch best
+          variants.sort((a, b) => {
+            const qa = parseInt(a.quality) || 0;
+            const qb = parseInt(b.quality) || 0;
+            return qb - qa;
+          });
+          
+          for (const v of variants) {
+            dispatchVideo({
+              url: v.url,
+              quality: v.quality,
+              source: 'hls',
+              title: title,
+              playlist: true,
+            });
+          }
+        } else {
+          // Single variant playlist - dispatch the master URL
+          dispatchVideo({
+            url: url,
+            source: 'hls',
+            title: title,
+            playlist: true,
+          });
+        }
+      } catch (e) {}
+    }
+  };
 
-    if (!responseText || responseText.length < 10) return;
+  const GenericParser = {
+    origins: [], // Matches all sites
+    
+    onLoad(responseText, url) {
+      try {
+        const data = JSON.parse(responseText);
+        const videoKeys = ['file', 'video_url', 'video', 'source', 'src', 'stream_url', 'download_url', 'url'];
+        
+        for (const key of videoKeys) {
+          const values = searchKey(data, key);
+          for (const value of values) {
+            if (typeof value === 'string' && value.match(/\.(mp4|m3u8)(\?|$)/i)) {
+              // Skip segments and byte-range URLs
+              if (value.includes('bytestart=') || value.includes('byteend=')) continue;
+              if (value.match(/seg-\d+|chunk-\d+|fragment-\d+/i)) continue;
+              
+              dispatchVideo({
+                url: value,
+                source: 'api',
+                title: document.title,
+              });
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  };
 
-    // Instagram
-    if (hostname.includes('instagram.com')) {
-      parseInstagram(responseText, url);
-    }
-    // Twitter/X
-    else if (hostname.includes('twitter.com') || hostname.includes('x.com')) {
-      parseTwitter(responseText, url);
-    }
-    // Generic
-    else if (responseText.includes('"url"') || responseText.includes('#EXTM3U')) {
-      parseGeneric(responseText, url);
-    }
-  }
+  // Order matters - site-specific first, then generic
+  const parsers = [
+    InstagramParser,
+    TwitterParser,
+    VimeoParser,
+    HLSParser,
+    GenericParser,
+  ];
 
   // XHR interception
   const originalOpen = XMLHttpRequest.prototype.open;
@@ -190,6 +299,7 @@
 
   XMLHttpRequest.prototype.open = function (method, url) {
     this._sidebyUrl = url;
+    this._sidebyMethod = method;
     return originalOpen.apply(this, arguments);
   };
 
@@ -200,22 +310,27 @@
         if (fullUrl && !fullUrl.startsWith('http')) {
           fullUrl = document.location.origin + fullUrl;
         }
-
+        
         let responseText = '';
         try {
           responseText = this.responseText;
         } catch (e) {
           return;
         }
-
-        if (responseText) {
-          processResponse(responseText, fullUrl);
+        
+        if (!responseText || responseText.length < 10) return;
+        
+        const hostname = document.location.hostname;
+        
+        for (const parser of parsers) {
+          // Check if parser applies to this site
+          if (parser.origins.length === 0 || parser.origins.some(o => hostname.includes(o))) {
+            parser.onLoad(responseText, fullUrl);
+          }
         }
-      } catch (e) {
-        // Ignore
-      }
+      } catch (e) {}
     });
-
+    
     return originalSend.apply(this, arguments);
   };
 
@@ -224,24 +339,27 @@
 
   window.fetch = async function (...args) {
     const response = await originalFetch.apply(this, args);
-
+    
     try {
       const clone = response.clone();
       const url = response.url || (typeof args[0] === 'string' ? args[0] : args[0]?.url);
-
+      
       const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('json') || contentType.includes('text')) {
-        clone
-          .text()
-          .then(text => {
-            if (text) {
-              processResponse(text, url);
+      if (contentType.includes('json') || contentType.includes('text') || contentType.includes('mpegurl')) {
+        clone.text().then(text => {
+          if (!text || text.length < 10) return;
+          
+          const hostname = document.location.hostname;
+          
+          for (const parser of parsers) {
+            if (parser.origins.length === 0 || parser.origins.some(o => hostname.includes(o))) {
+              parser.onLoad(text, url);
             }
-          })
-          .catch(() => {});
+          }
+        }).catch(() => {});
       }
     } catch (e) {}
-
+    
     return response;
   };
 
