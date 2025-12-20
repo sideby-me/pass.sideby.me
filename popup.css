@@ -1,5 +1,5 @@
 :root {
-  --font-space-grotesk: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-space-grotesk: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --radius: 0.75rem;
 
   /* Colors */
@@ -39,7 +39,8 @@ body {
 }
 
 .mono {
-  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono",
+    Menlo, monospace;
 }
 
 /* Layout Utilities */
@@ -156,9 +157,7 @@ body {
   font-weight: 700;
   height: 40px;
   padding: 0 16px;
-  transition:
-    background-color 0.18s ease,
-    border-color 0.18s ease,
+  transition: background-color 0.18s ease, border-color 0.18s ease,
     box-shadow 0.18s ease;
   cursor: pointer;
   border: 1px solid transparent;
@@ -312,7 +311,11 @@ body {
 
 .card.featured {
   border-color: hsl(var(--primary) / 0.6);
-  background: linear-gradient(180deg, hsl(var(--accent)) 0%, hsl(var(--card)) 100%);
+  background: linear-gradient(
+    180deg,
+    hsl(var(--accent)) 0%,
+    hsl(var(--card)) 100%
+  );
 }
 
 .pill {
@@ -350,9 +353,7 @@ body {
   border: 1px solid hsl(var(--border));
   background: hsl(var(--accent));
   cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    background 0.15s ease,
+  transition: border-color 0.15s ease, background 0.15s ease,
     box-shadow 0.15s ease;
 }
 
@@ -401,9 +402,7 @@ body {
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
-  transition:
-    background-color 0.15s ease,
-    color 0.15s ease,
+  transition: background-color 0.15s ease, color 0.15s ease,
     border-color 0.15s ease;
   text-decoration: none;
 }
@@ -416,4 +415,42 @@ body {
 
 .icon-btn:active {
   background: hsl(var(--accent));
+}
+
+/* Notice Banner */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: calc(var(--radius) - 2px);
+  background: hsl(var(--muted) / 0.5);
+  border: 1px solid hsl(var(--border));
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.5;
+  margin-bottom: 24px;
+}
+
+.notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: hsl(var(--primary));
+}
+
+/* Sticky Footer */
+.sticky-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: sticky;
+  bottom: 0;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    hsl(var(--background)) 30%
+  );
+  margin-top: auto;
 }

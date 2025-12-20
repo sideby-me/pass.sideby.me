@@ -1,4 +1,4 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -23,10 +23,20 @@
             class="icon-btn"
             title="Visit sideby.me"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
-              <path d="M2 12h20"/>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+              <path d="M2 12h20" />
             </svg>
           </a>
           <a
@@ -36,11 +46,23 @@
             class="icon-btn"
             title="Buy Me a Coffee"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10 2v2"/>
-              <path d="M14 2v2"/>
-              <path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/>
-              <path d="M6 2v2"/>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M10 2v2" />
+              <path d="M14 2v2" />
+              <path
+                d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"
+              />
+              <path d="M6 2v2" />
             </svg>
           </a>
         </div>
@@ -72,7 +94,31 @@
               <line x1="12" x2="12.01" y1="16" y2="16" />
             </svg>
           </div>
-          <span class="status-text" id="error-message">It's quiet... too quiet. No video found here.</span>
+          <span class="status-text" id="error-message"
+            >It's quiet... too quiet. No video found here.</span
+          >
+        </div>
+
+        <div class="notice pb-6">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4" />
+            <path d="M12 8h.01" />
+          </svg>
+          <span
+            >Not all links may work due to site restrictions. Try different
+            options if one doesn't play.</span
+          >
         </div>
 
         <!-- State: Success (Video Detected) -->
@@ -85,10 +131,19 @@
             <div class="card-content flex flex-col gap-2">
               <div class="flex flex-col gap-1">
                 <div class="flex items-center gap-2">
-                  <span id="video-quality" class="pill pill-ghost" hidden>1080p</span>
-                  <div id="video-title" class="truncate text-base font-semibold">Untitled Video</div>
+                  <span id="video-quality" class="pill pill-ghost" hidden
+                    >1080p</span
+                  >
+                  <div
+                    id="video-title"
+                    class="truncate text-base font-semibold"
+                  >
+                    Untitled Video
+                  </div>
                 </div>
-                <div class="text-xs text-muted-foreground">From <span id="page-host">this page</span></div>
+                <div class="text-xs text-muted-foreground">
+                  From <span id="page-host">this page</span>
+                </div>
               </div>
               <div id="video-url" class="mono truncate text-xs"></div>
             </div>
@@ -96,8 +151,10 @@
 
           <div class="video-list" id="video-list"></div>
 
-          <div class="flex flex-col gap-2">
-            <button id="create-room" class="btn btn-primary">Create Room</button>
+          <div class="sticky-footer">
+            <button id="create-room" class="btn btn-primary">
+              Create Room
+            </button>
             <button id="copy-link" class="btn btn-outline">Grab Link</button>
           </div>
         </div>
