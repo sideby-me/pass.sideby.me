@@ -6,8 +6,8 @@
   if (window.__sidebyWatcherInjected) return;
   window.__sidebyWatcherInjected = true;
 
-  const SIDEBY_EVENT = 'sideby:video-found';
-  const CLEAR_EVENT = 'sideby:clear-videos';
+  const SIDEBY_EVENT = "sideby:video-found";
+  const CLEAR_EVENT = "sideby:clear-videos";
 
   let lastUrl = document.location.href;
   const foundVideos = new Set();
@@ -16,7 +16,7 @@
   function dispatchVideo(video) {
     if (!video.url || foundVideos.has(video.url)) return;
     foundVideos.add(video.url);
-    
+
     try {
       window.dispatchEvent(new CustomEvent(SIDEBY_EVENT, { detail: video }));
     } catch (e) {}
@@ -31,15 +31,23 @@
   }
   setInterval(checkUrlChange, 500);
 
-  function searchKey(obj, key, results = []) {
-    if (!obj || typeof obj !== 'object') return results;
+  function searchKey(obj, key, results = [], extractTitle = false) {
+    if (!obj || typeof obj !== "object") return results;
     for (const k in obj) {
       if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
       if (k === key && obj[k]) {
+        // If extractTitle is true, look for sibling caption.text (Instagram)
+        if (extractTitle && obj.caption?.text && Array.isArray(obj[k])) {
+          for (const item of obj[k]) {
+            if (item && typeof item === "object") {
+              item._title = obj.caption.text;
+            }
+          }
+        }
         results.push(obj[k]);
       }
-      if (typeof obj[k] === 'object') {
-        searchKey(obj[k], key, results);
+      if (typeof obj[k] === "object") {
+        searchKey(obj[k], key, results, extractTitle);
       }
     }
     return results;
@@ -48,128 +56,138 @@
   // Clean byte-range params from Instagram URLs
   function cleanByteRangeUrl(url) {
     return url
-      .replace(/&bytestart=\d*/gi, '')
-      .replace(/&byteend=\d*/gi, '')
-      .replace(/\?bytestart=\d*&?/gi, '?')
-      .replace(/\?$/g, '');
+      .replace(/&bytestart=\d*/gi, "")
+      .replace(/&byteend=\d*/gi, "")
+      .replace(/\?bytestart=\d*&?/gi, "?")
+      .replace(/\?$/g, "");
   }
 
   // Site-specific parsers
   const InstagramParser = {
-    origins: ['www.instagram.com', 'instagram.com'],
-    
+    origins: ["www.instagram.com", "instagram.com", /instagram\.com/],
+
     onLoad(responseText, url) {
-      if (!responseText.includes('video_versions')) return;
-      
+      if (!responseText.includes("video_versions")) return;
+
       try {
         // Instagram sometimes prefixes with "for (;;);"
-        const cleaned = responseText.replace(/^for\s*\(;;\);?/g, '');
+        const cleaned = responseText.replace(/^for\s*\(;;\);?/g, "");
         const data = JSON.parse(cleaned);
-        const videoVersions = searchKey(data, 'video_versions');
-        
+        // Extract title from caption.text if present
+        const videoVersions = searchKey(data, "video_versions", [], true);
+
         for (const versions of videoVersions) {
           if (!Array.isArray(versions) || !versions.length) continue;
-          
+
           // Sort by width (highest first)
-          const sorted = [...versions].sort((a, b) => (b.width || 0) - (a.width || 0));
-          
+          const sorted = [...versions].sort(
+            (a, b) => (b.width || 0) - (a.width || 0)
+          );
+
           for (const v of sorted) {
             if (v && v.url) {
               const cleanUrl = cleanByteRangeUrl(v.url);
+              // Use caption title if extracted, otherwise document.title
+              const title = v._title || document.title;
               dispatchVideo({
                 url: cleanUrl,
                 quality: v.width ? `${v.width}p` : null,
-                source: 'instagram',
-                title: document.title,
+                source: "instagram",
+                title: title,
               });
               break; // Only take best quality
             }
           }
         }
       } catch (e) {}
-    }
+    },
   };
 
   const TwitterParser = {
-    origins: ['twitter.com', 'x.com'],
-    
+    origins: [/twitter\.com/, /x\.com/],
+
     onLoad(responseText, url) {
-      if (!responseText.includes('video_info')) return;
-      
+      if (!responseText.includes("video_info")) return;
+
       try {
         const data = JSON.parse(responseText);
-        const videoInfos = searchKey(data, 'video_info');
-        
+        const videoInfos = searchKey(data, "video_info");
+
         for (const info of videoInfos) {
-          if (!info || !info.variants || !Array.isArray(info.variants)) continue;
-          
+          if (!info || !info.variants || !Array.isArray(info.variants))
+            continue;
+
           // Filter out HLS, keep MP4s
-          const mp4Variants = info.variants.filter(v => 
-            v.url && 
-            v.content_type !== 'application/x-mpegURL' && 
-            !v.url.includes('.m3u8')
+          const mp4Variants = info.variants.filter(
+            (v) =>
+              v.url &&
+              v.content_type !== "application/x-mpegURL" &&
+              !v.url.includes(".m3u8")
           );
-          
+
           if (!mp4Variants.length) continue;
-          
+
           // Sort by bitrate (highest first)
           mp4Variants.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
           const best = mp4Variants[0];
-          
+
           // Extract quality from URL (e.g., /avc1/720x1280/)
           let quality = null;
           const match = best.url.match(/avc1\/(\d+)x(\d+)/);
           if (match) {
             quality = `${Math.min(parseInt(match[1]), parseInt(match[2]))}p`;
           }
-          
+
           dispatchVideo({
             url: best.url,
             quality: quality,
-            source: 'twitter',
+            source: "twitter",
             title: document.title,
           });
         }
       } catch (e) {}
-    }
+    },
   };
 
   const VimeoParser = {
-    origins: ['vimeo.com', 'player.vimeo.com'],
-    
+    origins: [/vimeo\.com/],
+
     onLoad(responseText, url) {
-      if (!url.includes('/config')) return;
-      
+      if (!url.includes("/config")) return;
+
       try {
         const data = JSON.parse(responseText);
-        const title = document.querySelector('#main main h1')?.innerText || document.title;
-        
+        const title =
+          document.querySelector("#main main h1")?.innerText || document.title;
+
         // Check progressive files first
         const progressive = data?.request?.files?.progressive;
         if (progressive && progressive.length) {
           // Sort by width (highest first)
-          const sorted = [...progressive].sort((a, b) => (b.width || 0) - (a.width || 0));
+          const sorted = [...progressive].sort(
+            (a, b) => (b.width || 0) - (a.width || 0)
+          );
           for (const p of sorted) {
             dispatchVideo({
               url: p.url,
               quality: p.width ? `${p.width}p` : null,
-              source: 'vimeo',
+              source: "vimeo",
               title: title,
             });
           }
           return;
         }
-        
+
         // Fall back to HLS
         const hls = data?.request?.files?.hls;
         if (hls && hls.cdns) {
           for (const cdnKey in hls.cdns) {
             const cdnUrl = hls.cdns[cdnKey].url;
-            if (cdnUrl && !cdnUrl.includes('cme-media.vimeocdn.com')) {
+            if (cdnUrl && !cdnUrl.includes("cme-media.vimeocdn.com")) {
               dispatchVideo({
-                url: cdnUrl.replace(/\/subtitles\/.*\//, '/'),
+                url: cdnUrl.replace(/\/subtitles\/.*\//, "/"),
                 quality: data?.video?.height ? `${data.video.height}p` : null,
-                source: 'vimeo',
+                source: "vimeo",
                 title: title,
                 playlist: true,
               });
@@ -177,68 +195,72 @@
           }
         }
       } catch (e) {}
-    }
+    },
   };
 
   const HLSParser = {
     origins: [], // Matches all sites
-    
+
     onLoad(responseText, url) {
-      if (!responseText.includes('#EXTM3U')) return;
-      if (!url.includes('.m3u8')) return;
-      
+      if (!responseText.includes("#EXTM3U")) return;
+      if (!url.includes(".m3u8")) return;
+
       try {
         const title = document.title;
         const variants = [];
-        
+
         // Parse master playlist
-        if (responseText.includes('#EXT-X-STREAM-INF:')) {
-          const segments = responseText.split('#EXT-X-STREAM-INF:');
-          
+        if (responseText.includes("#EXT-X-STREAM-INF:")) {
+          const segments = responseText.split("#EXT-X-STREAM-INF:");
+
           for (const segment of segments) {
             if (!segment.trim()) continue;
-            
+
             let quality = null;
             let variantUrl = null;
-            
+
             const parts = segment.split(/[\s,\n]+/);
             for (const part of parts) {
-              if (part.includes('RESOLUTION=')) {
-                const res = part.split('=')[1];
+              if (part.includes("RESOLUTION=")) {
+                const res = part.split("=")[1];
                 if (res) {
-                  quality = res.split('x')[1] + 'p';
+                  quality = res.split("x")[1] + "p";
                 }
               }
-              if (part.includes('.m3u8') || part.match(/^https?:\/\//)) {
+              // Skip comment lines when looking for URLs
+              if (
+                !part.startsWith("#") &&
+                (part.includes(".m3u8") || part.match(/^https?:\/\//))
+              ) {
                 variantUrl = part.trim();
               }
             }
-            
+
             if (variantUrl) {
               // Make absolute URL if relative
-              if (!variantUrl.startsWith('http')) {
+              if (!variantUrl.startsWith("http")) {
                 const baseMatch = url.match(/(.+\/)[^\/]+\.m3u8/i);
                 if (baseMatch) {
                   variantUrl = baseMatch[1] + variantUrl;
                 }
               }
-              
+
               variants.push({ url: variantUrl, quality });
             }
           }
-          
+
           // Sort by quality and dispatch best
           variants.sort((a, b) => {
             const qa = parseInt(a.quality) || 0;
             const qb = parseInt(b.quality) || 0;
             return qb - qa;
           });
-          
+
           for (const v of variants) {
             dispatchVideo({
               url: v.url,
               quality: v.quality,
-              source: 'hls',
+              source: "hls",
               title: title,
               playlist: true,
             });
@@ -247,41 +269,54 @@
           // Single variant playlist - dispatch the master URL
           dispatchVideo({
             url: url,
-            source: 'hls',
+            source: "hls",
             title: title,
             playlist: true,
           });
         }
       } catch (e) {}
-    }
+    },
   };
 
   const GenericParser = {
     origins: [], // Matches all sites
-    
+
     onLoad(responseText, url) {
       try {
         const data = JSON.parse(responseText);
-        const videoKeys = ['file', 'video_url', 'video', 'source', 'src', 'stream_url', 'download_url', 'url'];
-        
+        const videoKeys = [
+          "file",
+          "video_url",
+          "video",
+          "source",
+          "src",
+          "stream_url",
+          "download_url",
+          "url",
+        ];
+
         for (const key of videoKeys) {
           const values = searchKey(data, key);
           for (const value of values) {
-            if (typeof value === 'string' && value.match(/\.(mp4|m3u8)(\?|$)/i)) {
+            if (
+              typeof value === "string" &&
+              value.match(/\.(mp4|m3u8)(\?|$)/i)
+            ) {
               // Skip segments and byte-range URLs
-              if (value.includes('bytestart=') || value.includes('byteend=')) continue;
+              if (value.includes("bytestart=") || value.includes("byteend="))
+                continue;
               if (value.match(/seg-\d+|chunk-\d+|fragment-\d+/i)) continue;
-              
+
               dispatchVideo({
                 url: value,
-                source: 'api',
+                source: "api",
                 title: document.title,
               });
             }
           }
         }
       } catch (e) {}
-    }
+    },
   };
 
   // Order matters - site-specific first, then generic
@@ -304,33 +339,39 @@
   };
 
   XMLHttpRequest.prototype.send = function () {
-    this.addEventListener('load', function () {
+    this.addEventListener("load", function () {
       try {
         let fullUrl = this._sidebyUrl;
-        if (fullUrl && !fullUrl.startsWith('http')) {
+        if (fullUrl && !fullUrl.startsWith("http")) {
           fullUrl = document.location.origin + fullUrl;
         }
-        
-        let responseText = '';
+
+        let responseText = "";
         try {
           responseText = this.responseText;
         } catch (e) {
           return;
         }
-        
+
         if (!responseText || responseText.length < 10) return;
-        
+
         const hostname = document.location.hostname;
-        
+
         for (const parser of parsers) {
-          // Check if parser applies to this site
-          if (parser.origins.length === 0 || parser.origins.some(o => hostname.includes(o))) {
+          // Check if parser applies to this site (supports both strings and regex)
+          if (
+            parser.origins.length === 0 ||
+            parser.origins.some((o) => {
+              if (o instanceof RegExp) return o.test(hostname);
+              return hostname === o || hostname.includes(o);
+            })
+          ) {
             parser.onLoad(responseText, fullUrl);
           }
         }
       } catch (e) {}
     });
-    
+
     return originalSend.apply(this, arguments);
   };
 
@@ -339,29 +380,44 @@
 
   window.fetch = async function (...args) {
     const response = await originalFetch.apply(this, args);
-    
+
     try {
       const clone = response.clone();
-      const url = response.url || (typeof args[0] === 'string' ? args[0] : args[0]?.url);
-      
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('json') || contentType.includes('text') || contentType.includes('mpegurl')) {
-        clone.text().then(text => {
-          if (!text || text.length < 10) return;
-          
-          const hostname = document.location.hostname;
-          
-          for (const parser of parsers) {
-            if (parser.origins.length === 0 || parser.origins.some(o => hostname.includes(o))) {
-              parser.onLoad(text, url);
+      const url =
+        response.url || (typeof args[0] === "string" ? args[0] : args[0]?.url);
+
+      const contentType = response.headers.get("content-type") || "";
+      if (
+        contentType.includes("json") ||
+        contentType.includes("text") ||
+        contentType.includes("mpegurl")
+      ) {
+        clone
+          .text()
+          .then((text) => {
+            if (!text || text.length < 10) return;
+
+            const hostname = document.location.hostname;
+
+            for (const parser of parsers) {
+              // Check if parser applies to this site (supports both strings and regex)
+              if (
+                parser.origins.length === 0 ||
+                parser.origins.some((o) => {
+                  if (o instanceof RegExp) return o.test(hostname);
+                  return hostname === o || hostname.includes(o);
+                })
+              ) {
+                parser.onLoad(text, url);
+              }
             }
-          }
-        }).catch(() => {});
+          })
+          .catch(() => {});
       }
     } catch (e) {}
-    
+
     return response;
   };
 
-  console.log('Sideby Pass: Watcher initialized');
+  console.log("Sideby Pass: Watcher initialized");
 })();
