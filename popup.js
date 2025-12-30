@@ -1,5 +1,5 @@
 const APP_BASE_URL = "https://sideby.me";
-const API_BASE_URL = "https://watch.sideby.me";
+const API_BASE_URL = "https://sideby.me";
 
 // DOM Elements
 const stateLoading = document.getElementById("state-loading");

@@ -41,6 +41,11 @@
   --ring: 209 95% 40%;
 }
 
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}
+
 body {
   margin: 0;
   font-family: var(--font-space-grotesk);
@@ -138,7 +143,7 @@ body {
 .shell {
   width: 380px;
   min-height: 400px;
-  padding: 20px;
+  padding: 20px 20px 0 20px;
   box-sizing: border-box;
 }
 
@@ -440,4 +445,5 @@ body {
     hsl(var(--background)) 20%
   );
   margin-top: auto;
+  padding-bottom: 20px;
 }
