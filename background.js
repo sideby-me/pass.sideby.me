@@ -1,4 +1,4 @@
-const APP_BASE_URL = 'https://sideby.me';
+const APP_BASE_URL = "https://sideby.me";
 
 // Sideby Pass - Background Script
 // Handles video detection via webRequest API, message handling from content scripts & M3U8 playlist fetching/parsing
@@ -13,18 +13,19 @@ const ENTRY_TTL_MS = 10 * 60 * 1000;
 
 // HLS Content Types
 const HLS_CONTENT_TYPES = [
-  'audio/mpegurl',
-  'application/mpegurl',
-  'application/x-mpegurl',
-  'audio/x-mpegurl',
-  'application/vnd.apple.mpegurl',
-  'application/vnd.apple.mpegurl.audio',
+  "audio/mpegurl",
+  "application/mpegurl",
+  "application/x-mpegurl",
+  "audio/x-mpegurl",
+  "application/vnd.apple.mpegurl",
+  "application/vnd.apple.mpegurl.audio",
 ];
 
 // Patterns for video detection
 const VIDEO_EXTENSIONS = /\.(mp4|m4v|mov|m3u8)(\?|#|$)/i;
 const SEGMENT_EXTENSIONS = /\.(ts|m4s|m4a)(\?|#|$)/i;
-const VIDEO_CONTENT_TYPES = /^(video\/|application\/(vnd\.apple\.mpegurl|x-mpegurl))/i;
+const VIDEO_CONTENT_TYPES =
+  /^(video\/|application\/(vnd\.apple\.mpegurl|x-mpegurl))/i;
 
 // Patterns to identify segments (should be filtered out)
 const SEGMENT_PATTERNS = [
@@ -38,34 +39,34 @@ const SEGMENT_PATTERNS = [
 
 // Patterns to identify audio-only
 const AUDIO_ONLY_PATTERNS = [
-  /[_\-/]audio[_\-/]/i, 
-  /audio[_\-]only/i, 
-  /\.m4a(\?|#|$)/i, 
-  /\.aac(\?|#|$)/i
+  /[_\-/]audio[_\-/]/i,
+  /audio[_\-]only/i,
+  /\.m4a(\?|#|$)/i,
+  /\.aac(\?|#|$)/i,
 ];
 
 // Source priority scores (higher = more relevant)
 const SOURCE_PRIORITY = {
-  'instagram': 100,
-  'twitter': 100,
-  'vimeo': 100,
-  'tiktok': 100,
-  'instagram-json': 95,
-  'api': 90,
-  'hls': 85,
-  'og:video': 80,
-  'dom-playing': 75,
-  'dom': 50,
-  'webRequest': 40,
+  instagram: 100,
+  twitter: 100,
+  vimeo: 100,
+  tiktok: 100,
+  "instagram-json": 95,
+  api: 90,
+  hls: 85,
+  "og:video": 80,
+  "dom-playing": 75,
+  dom: 50,
+  webRequest: 40,
 };
 
 // URL utilities
 function cleanByteRangeUrl(url) {
   return url
-    .replace(/&bytestart=\d*/gi, '')
-    .replace(/&byteend=\d*/gi, '')
-    .replace(/\?bytestart=\d*&?/gi, '?')
-    .replace(/\?$/g, '');
+    .replace(/&bytestart=\d*/gi, "")
+    .replace(/&byteend=\d*/gi, "")
+    .replace(/\?bytestart=\d*&?/gi, "?")
+    .replace(/\?$/g, "");
 }
 
 // Video filtering
@@ -78,7 +79,11 @@ function isPlayableVideo(url, contentType, size, source) {
   }
 
   // Allow YouTube URLs (played directly)
-  if (lower.includes('youtube.com/watch') || lower.includes('youtube.com/shorts/') || lower.includes('youtu.be/')) {
+  if (
+    lower.includes("youtube.com/watch") ||
+    lower.includes("youtube.com/shorts/") ||
+    lower.includes("youtu.be/")
+  ) {
     return true;
   }
 
@@ -91,7 +96,8 @@ function isPlayableVideo(url, contentType, size, source) {
   // Must have video extension or content type
   const hasVideoExt = VIDEO_EXTENSIONS.test(lower);
   const hasSegmentExt = SEGMENT_EXTENSIONS.test(lower);
-  const hasVideoContentType = contentType && VIDEO_CONTENT_TYPES.test(contentType);
+  const hasVideoContentType =
+    contentType && VIDEO_CONTENT_TYPES.test(contentType);
 
   if (!hasVideoExt && !hasVideoContentType) {
     if (hasSegmentExt && size && size > MIN_VIDEO_SIZE_BYTES * 2) {
@@ -199,40 +205,44 @@ async function fetchAndParseM3U8(url, tabId) {
   try {
     const response = await fetch(url);
     const text = await response.text();
-    
-    if (!text.includes('#EXTM3U')) return;
-    
+
+    if (!text.includes("#EXTM3U")) return;
+
     const variants = [];
-    
-    if (text.includes('#EXT-X-STREAM-INF:')) {
+
+    if (text.includes("#EXT-X-STREAM-INF:")) {
       // Master playlist - parse variants
-      const segments = text.split('#EXT-X-STREAM-INF:');
-      
+      const segments = text.split("#EXT-X-STREAM-INF:");
+
       for (const segment of segments) {
         if (!segment.trim()) continue;
-        
+
         let quality = null;
         let variantUrl = null;
-        
-        const lines = segment.split('\n');
+
+        const lines = segment.split("\n");
         for (const line of lines) {
           const trimmed = line.trim();
-          
-          if (trimmed.includes('RESOLUTION=')) {
+
+          if (trimmed.includes("RESOLUTION=")) {
             const match = trimmed.match(/RESOLUTION=(\d+)x(\d+)/);
             if (match) {
               quality = `${Math.min(parseInt(match[1]), parseInt(match[2]))}p`;
             }
           }
-          
-          if (trimmed && !trimmed.startsWith('#') && (trimmed.includes('.m3u8') || trimmed.match(/^https?:\/\//))) {
+
+          if (
+            trimmed &&
+            !trimmed.startsWith("#") &&
+            (trimmed.includes(".m3u8") || trimmed.match(/^https?:\/\//))
+          ) {
             variantUrl = trimmed;
           }
         }
-        
+
         if (variantUrl) {
           // Make absolute URL if relative
-          if (!variantUrl.startsWith('http')) {
+          if (!variantUrl.startsWith("http")) {
             const baseMatch = url.match(/(.+\/)[^\/]+\.m3u8/i);
             if (baseMatch) {
               variantUrl = baseMatch[1] + variantUrl;
@@ -241,19 +251,19 @@ async function fetchAndParseM3U8(url, tabId) {
           variants.push({ url: variantUrl, quality });
         }
       }
-      
+
       // Sort by quality and add best variants
       variants.sort((a, b) => {
         const qa = parseInt(a.quality) || 0;
         const qb = parseInt(b.quality) || 0;
         return qb - qa;
       });
-      
+
       for (const v of variants.slice(0, 3)) {
         addVideoToTab(tabId, {
           url: v.url,
           quality: v.quality,
-          source: 'hls',
+          source: "hls",
           title: null,
           playlist: true,
         });
@@ -265,11 +275,11 @@ async function fetchAndParseM3U8(url, tabId) {
 // Video storage
 function addVideoToTab(tabId, video) {
   if (!tabId || !video.url) return;
-  if (video.url.startsWith('blob:') || video.url.startsWith('data:')) return;
-  
+  if (video.url.startsWith("blob:") || video.url.startsWith("data:")) return;
+
   // Clean the URL
   const cleanUrl = cleanByteRangeUrl(video.url);
-  
+
   if (!videosByTab.has(tabId)) {
     videosByTab.set(tabId, new Map());
   }
@@ -291,7 +301,7 @@ function addVideoToTab(tabId, video) {
     // Update with higher priority source
     const existingPriority = SOURCE_PRIORITY[existing.source] || 0;
     const newPriority = SOURCE_PRIORITY[video.source] || 0;
-    
+
     if (newPriority > existingPriority) {
       existing.source = video.source;
     }
@@ -306,70 +316,79 @@ function addVideoToTab(tabId, video) {
 
 // WebRequest listener
 chrome.webRequest.onCompleted.addListener(
-  async details => {
+  async (details) => {
     try {
       if (!details.tabId || details.tabId < 0) return;
 
       const url = details.url;
-      if (!url || url.startsWith('data:') || url.startsWith('blob:')) return;
+      if (!url || url.startsWith("data:") || url.startsWith("blob:")) return;
 
-      const contentTypeHeader = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type');
-      const contentType = contentTypeHeader?.value || '';
+      const contentTypeHeader = details.responseHeaders?.find(
+        (h) => h.name.toLowerCase() === "content-type"
+      );
+      const contentType = contentTypeHeader?.value || "";
 
       // Check for M3U8/HLS content type
-      const isHLS = HLS_CONTENT_TYPES.some(ct => contentType.toLowerCase().includes(ct));
-      const isM3U8Url = url.includes('.m3u8');
+      const isHLS = HLS_CONTENT_TYPES.some((ct) =>
+        contentType.toLowerCase().includes(ct)
+      );
+      const isM3U8Url = url.includes(".m3u8");
 
       if (isHLS || isM3U8Url) {
         // Fetch and parse M3U8 for variants
         fetchAndParseM3U8(url, details.tabId);
-        
+
         // Also add the master playlist
         addVideoToTab(details.tabId, {
           url: url,
           contentType: contentType,
-          source: 'hls',
+          source: "hls",
           playlist: true,
         });
         return;
       }
 
       // Check for regular video
-      const hasVideoExt = VIDEO_EXTENSIONS.test(url) || SEGMENT_EXTENSIONS.test(url);
+      const hasVideoExt =
+        VIDEO_EXTENSIONS.test(url) || SEGMENT_EXTENSIONS.test(url);
       const hasVideoContentType = VIDEO_CONTENT_TYPES.test(contentType);
 
       if (!hasVideoExt && !hasVideoContentType) return;
 
-      const contentLengthHeader = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length');
-      const size = contentLengthHeader?.value ? parseInt(contentLengthHeader.value, 10) : null;
+      const contentLengthHeader = details.responseHeaders?.find(
+        (h) => h.name.toLowerCase() === "content-length"
+      );
+      const size = contentLengthHeader?.value
+        ? parseInt(contentLengthHeader.value, 10)
+        : null;
 
       addVideoToTab(details.tabId, {
         url: url,
         size: size,
         contentType: contentType,
-        source: 'webRequest',
+        source: "webRequest",
       });
     } catch (e) {}
   },
-  { urls: ['<all_urls>'], types: ['media', 'xmlhttprequest', 'other'] },
-  ['responseHeaders']
+  { urls: ["<all_urls>"], types: ["media", "xmlhttprequest", "other"] },
+  ["responseHeaders"]
 );
 
 // Tab cleanup
-chrome.tabs.onRemoved.addListener(tabId => {
+chrome.tabs.onRemoved.addListener((tabId) => {
   videosByTab.delete(tabId);
 });
 
 // Message handlers
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === 'GET_VIDEOS') {
+  if (message?.type === "GET_VIDEOS") {
     const tabId = message.tabId;
     const videos = getVideosForTab(tabId);
     sendResponse({ videos });
     return true;
   }
 
-  if (message?.type === 'ADD_VIDEO') {
+  if (message?.type === "ADD_VIDEO") {
     const tabId = message.tabId || sender?.tab?.id;
     addVideoToTab(tabId, {
       url: message.url,
@@ -381,7 +400,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'CLEAR_VIDEOS') {
+  if (message?.type === "CLEAR_VIDEOS") {
     const tabId = sender?.tab?.id;
     if (tabId && videosByTab.has(tabId)) {
       videosByTab.get(tabId).clear();
@@ -394,24 +413,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(() => {
   try {
     chrome.contextMenus.create({
-      id: 'sideby-pass',
-      title: 'Play with Sideby Pass',
-      contexts: ['video', 'link'],
+      id: "sideby-pass",
+      title: "Play with Sideby Pass",
+      contexts: ["video", "link"],
     });
   } catch (e) {
-    console.error('Failed to create context menu', e);
+    console.error("Failed to create context menu", e);
   }
 });
 
-chrome.contextMenus.onClicked.addListener(info => {
-  if (info.menuItemId !== 'sideby-pass') return;
+chrome.contextMenus.onClicked.addListener((info) => {
+  if (info.menuItemId !== "sideby-pass") return;
 
   const videoUrl = info.srcUrl || info.linkUrl;
   if (!videoUrl) return;
 
   const params = new URLSearchParams();
-  params.set('videoUrl', videoUrl);
-  params.set('autoplay', '1');
+  params.set("videoUrl", videoUrl);
+  params.set("autoplay", "1");
 
   const url = `${APP_BASE_URL}/create?${params.toString()}`;
   chrome.tabs.create({ url });

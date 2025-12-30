@@ -1,4 +1,5 @@
-const APP_BASE_URL = 'https://sideby.me';
+const APP_BASE_URL = "https://sideby.me";
+const API_BASE_URL = "https://watch.sideby.me";
 
 // DOM Elements
 const stateLoading = document.getElementById("state-loading");
@@ -79,6 +80,23 @@ function updateVideoInfo(index) {
   pageHost.textContent = getHost(pageInfo.pageUrl || video.url);
   videoKind.textContent = getVideoKind(video.url);
 
+  // Show confidence warning
+  const warningEl = document.getElementById("video-warning");
+  if (video.confidence === "low") {
+    videoKind.classList.remove("pill-ghost", "pill-warning", "pill-success");
+    videoKind.classList.add("pill-danger");
+    videoKind.title =
+      video.confidenceReason || "Low confidence: Use cautiously";
+  } else if (video.confidence === "medium") {
+    videoKind.classList.remove("pill-ghost", "pill-success", "pill-danger");
+    videoKind.classList.add("pill-warning");
+    videoKind.title = video.confidenceReason || "Medium confidence";
+  } else {
+    videoKind.classList.remove("pill-ghost", "pill-warning", "pill-danger");
+    videoKind.classList.add("pill-success");
+    videoKind.title = video.confidenceReason || "High confidence";
+  }
+
   const items = Array.from(videoList.querySelectorAll(".video-item"));
   items.forEach((item) => {
     item.classList.toggle("selected", Number(item.dataset.index) === index);
@@ -95,12 +113,22 @@ function renderVideoList(videos) {
     const quality = v.quality || "";
     const source = v.source || "";
 
+    let confidencePill = "";
+    if (v.confidence === "high") {
+      confidencePill = `<span class="pill pill-success" title="${v.confidenceReason}">High</span>`;
+    } else if (v.confidence === "medium") {
+      confidencePill = `<span class="pill pill-warning" title="${v.confidenceReason}">Medium</span>`;
+    } else if (v.confidence === "low") {
+      confidencePill = `<span class="pill pill-danger" title="${v.confidenceReason}">Low</span>`;
+    }
+
     const item = document.createElement("button");
     item.type = "button";
     item.className = "video-item";
     item.dataset.index = String(i);
     item.innerHTML = `
       <div class="video-item__meta">
+        ${confidencePill}
         <span class="pill pill-ghost">${kind}</span>
         ${quality ? `<span class="pill pill-ghost">${quality}</span>` : ""}
         ${size ? `<span class="pill pill-ghost">${size}</span>` : ""}
@@ -129,6 +157,26 @@ function buildCreateUrl(videoUrl) {
 }
 
 // Initialization
+async function resolveVideo(video) {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/video/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: video.url }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.meta) {
+        video.confidence = data.meta.confidence;
+        video.confidenceReason = data.meta.confidenceReason;
+        video.deliveryType = data.meta.deliveryType;
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to resolve video", err);
+  }
+}
+
 async function init() {
   showState("loading");
 
@@ -177,7 +225,7 @@ async function init() {
     // Get videos from background script
     chrome.runtime.sendMessage(
       { type: "GET_VIDEOS", tabId: tab.id },
-      (response) => {
+      async (response) => {
         if (chrome.runtime.lastError) {
           console.warn("Runtime error:", chrome.runtime.lastError.message);
           errorMessage.textContent = "Could not detect videos.";
@@ -185,7 +233,7 @@ async function init() {
           return;
         }
 
-        const videos = Array.isArray(response?.videos) ? response.videos : [];
+        let videos = Array.isArray(response?.videos) ? response.videos : [];
 
         if (!videos.length) {
           errorMessage.textContent = "No video found. Try playing it first.";
@@ -193,12 +241,32 @@ async function init() {
           return;
         }
 
+        // Render immediately
+        renderVideoList(videos);
+
+        // Asynchronously resolve confidence for each video
+        await Promise.allSettled(videos.map(resolveVideo));
+
+        // Sort: High > Medium > Low > undefined
+        const confidenceScore = (c) => {
+          if (c === "high") return 3;
+          if (c === "medium") return 2;
+          if (c === "low") return 1;
+          return 0;
+        };
+
+        videos.sort(
+          (a, b) =>
+            confidenceScore(b.confidence) - confidenceScore(a.confidence)
+        );
+
         detectedVideos = videos;
         selectedIndex = 0;
 
         videoCountPill.textContent = `${videos.length} ${
           videos.length === 1 ? "video" : "videos"
         }`;
+
         renderVideoList(videos);
         updateVideoInfo(0);
         showState("success");
