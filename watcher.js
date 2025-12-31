@@ -15,6 +15,19 @@
   // Utilities
   function dispatchVideo(video) {
     if (!video.url || foundVideos.has(video.url)) return;
+
+    // Flag already-proxied URLs (lower confidence)
+    if (isAlreadyProxied(video.url)) {
+      video.alreadyProxied = true;
+    }
+
+    // Embed page origin headers for proxy to use (unless already has headers)
+    if (!video.url.includes("headers=") && !video.alreadyProxied) {
+      const pageReferer = document.location.href;
+      const pageOrigin = document.location.origin;
+      video.url = embedHeaders(video.url, pageReferer, pageOrigin);
+    }
+
     foundVideos.add(video.url);
 
     try {
@@ -60,6 +73,48 @@
       .replace(/&byteend=\d*/gi, "")
       .replace(/\?bytestart=\d*&?/gi, "?")
       .replace(/\?$/g, "");
+  }
+
+  // Check if a string is a valid URL
+  function isValidUrl(str) {
+    try {
+      const url = new URL(str);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+      return false;
+    }
+  }
+
+  // Embed referer/origin headers into a video URL for proxy to use
+  function embedHeaders(videoUrl, referer, origin) {
+    if (!referer && !origin) return videoUrl;
+    // Skip if headers already embedded
+    if (videoUrl.includes("headers=")) return videoUrl;
+
+    try {
+      const headers = {};
+      // Only embed valid URLs as referer/origin
+      if (referer && isValidUrl(referer)) headers.referer = referer;
+      if (origin && isValidUrl(origin)) headers.origin = origin;
+
+      if (Object.keys(headers).length === 0) return videoUrl;
+
+      const url = new URL(videoUrl);
+      url.searchParams.set("headers", JSON.stringify(headers));
+      return url.toString();
+    } catch {
+      return videoUrl;
+    }
+  }
+
+  // Detect already-proxied URLs to avoid double-proxying
+  function isAlreadyProxied(url) {
+    const proxyPatterns = [
+      /m3u8-proxy\?url=/i,
+      /pipe\.sideby\.me/i,
+      /\/proxy\/\?url=/i,
+    ];
+    return proxyPatterns.some((p) => p.test(url));
   }
 
   // Site-specific parsers
